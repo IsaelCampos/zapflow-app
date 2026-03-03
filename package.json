@@ -1,0 +1,61 @@
+{
+  "name": "zapflow",
+  "version": "1.1.0",
+  "description": "Envio automático de mensagens via WhatsApp Web",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder --win"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "lowdb": "^1.0.0",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.23.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^40.6.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.zapflow.app",
+    "productName": "ZapFlow",
+    "copyright": "Copyright © 2024 ZapFlow",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "renderer/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "renderer/assets/icon.ico",
+      "uninstallerIcon": "renderer/assets/icon.ico",
+      "installerHeaderIcon": "renderer/assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ZapFlow"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "node_modules/**/*",
+      "!node_modules/electron/**/*",
+      "!**/*.map",
+      "!**/*.md"
+    ],
+    "extraResources": [],
+    "asar": true
+  }
+}
