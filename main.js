@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 // ─── URL do servidor de licenças ──────────────────────────────────────────────
 const SERVER_URL = 'https://astonishing-endurance-production-154b.up.railway.app';
@@ -67,8 +68,47 @@ function createWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // Configuração do autoUpdater
+  mainWindow.once('ready-to-show', () => {
+    autoUpdater.checkForUpdatesAndNotify();
+  });
 }
 
+// ─── Eventos do autoUpdater ───────────────────────────────────────────────────
+autoUpdater.on('update-available', (info) => {
+  logger && logger.log.info('AUTOUPDATE', 'Nova versão disponível', info);
+  mainWindow.webContents.send('update_available', info);
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  logger && logger.log.info('AUTOUPDATE', 'Nenhuma atualização disponível');
+});
+
+autoUpdater.on('error', (err) => {
+  logger && logger.log.erro('AUTOUPDATE', 'Erro no auto-updater', { erro: err.message });
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+  logger && logger.log.info('AUTOUPDATE', `Download: ${progressObj.percent}%`);
+  mainWindow.webContents.send('update_progress', progressObj);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  logger && logger.log.info('AUTOUPDATE', 'Atualização baixada. Pronto para instalar.');
+  dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Instalar e Reiniciar', 'Mais tarde'],
+    defaultId: 0,
+    message: 'Uma nova versão do ZapFlow foi baixada. Deseja reiniciar o aplicativo para instalar as atualizações?'
+  }).then(returnValue => {
+    if (returnValue.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+});
+
+// ─── Inicialização do app ─────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   logger = require('./src/logger');
   logger.inicializar(app.getPath('userData'));
@@ -213,13 +253,13 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs 
 
         enviados++;
         relatorio.registrarEnvio(sessaoId, c.nome, c.telefone, 'sucesso', null, 1);
-        logger && logger.log.envio(c.nome, c.telefone, 'sucesso');
+        logger && logger.log.info('ENVIO', `Enviado para ${c.nome} (${c.telefone})`);
         safeSend('sending-progress', { index: i, total: contatos.length, nome: c.nome, telefone: c.telefone, status: 'ok' });
 
       } catch (err) {
         erros++;
         relatorio.registrarEnvio(sessaoId, c.nome, c.telefone, 'erro', err.message, 1);
-        logger && logger.log.envio(c.nome, c.telefone, 'erro', err.message);
+        logger && logger.log.erro('ENVIO', `Erro para ${c.nome} (${c.telefone})`, { erro: err.message });
         safeSend('sending-progress', { index: i, total: contatos.length, nome: c.nome, telefone: c.telefone, status: 'erro', motivo: err.message });
       }
 
@@ -276,12 +316,43 @@ async function verificarLicenca() {
     safeSend('licenca-status', { ok: false, acao: 'ativar', serverUrl: SERVER_URL, machineId: getMachineId() });
     return;
   }
-  logger && logger.log.info('LICENCA', 'Verificando online...', { chave: salva.chave.slice(0,8) + '...' });
-  safeSend('licenca-status', {
-    verificando: true, chave: salva.chave,
-    serverUrl: SERVER_URL, machineId: getMachineId(),
-    plano: salva.plano, expira_formatado: salva.expira_formatado, expira_em: salva.expira_em
-  });
+
+  try {
+    const resultado = await verificarOnline(SERVER_URL, salva.chave, getMachineId());
+    if (resultado && resultado.ok) {
+      licencaValida = true;
+      logger && logger.log.info('LICENCA', 'Licença válida', { plano: resultado.plano });
+      safeSend('licenca-status', {
+        ok: true,
+        plano: resultado.plano,
+        cliente: resultado.cliente,
+        expira: resultado.expira_formatado,
+        serverUrl: SERVER_URL,
+        machineId: getMachineId(),
+        chave: salva.chave
+      });
+      iniciarVerificacaoPeriodica();
+    } else {
+      licencaValida = false;
+      logger && logger.log.warn('LICENCA', 'Licença inválida no servidor', { erro: resultado?.erro });
+      try { fs.unlinkSync(getLicencaPath(app.getPath('userData'))); } catch {}
+      safeSend('licenca-status', { ok: false, acao: 'expirada', motivo: resultado?.erro || 'Licença inválida.' });
+    }
+  } catch (err) {
+    logger && logger.log.warn('LICENCA', 'Falha na verificação online, usando cache', { erro: err.message });
+    licencaValida = true;
+    safeSend('licenca-status', {
+      ok: true,
+      plano: salva.plano,
+      cliente: salva.cliente,
+      expira: salva.expira_formatado,
+      serverUrl: SERVER_URL,
+      machineId: getMachineId(),
+      chave: salva.chave,
+      offline: true
+    });
+    iniciarVerificacaoPeriodica();
+  }
 }
 
 ipcMain.handle('get-machine-info', () => ({ machineId: getMachineId(), serverUrl: SERVER_URL }));
