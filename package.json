@@ -1,6 +1,6 @@
 {
   "name": "zapflow",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "Envio automático de mensagens via WhatsApp Web",
   "main": "main.js",
   "scripts": {
