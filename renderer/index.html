@@ -743,6 +743,12 @@
         </svg>
         <span id="connect-btn-text">Conectar WhatsApp</span>
       </button>
+
+      <button class="sidebar-connect-btn" id="btn-trocar-numero"
+        onclick="trocarNumero()"
+        style="display:none; margin-top:8px; background:var(--surface3); color:var(--yellow); border:1px solid #7a6030;">
+        🔄 Trocar número
+      </button>
     </div>
   </nav>
 
@@ -1191,6 +1197,19 @@ async function handleConnectBtn() {
   await api.connectWhatsApp();
 }
 
+async function trocarNumero() {
+  const btn = document.getElementById('btn-trocar-numero');
+  btn.disabled = true;
+  btn.textContent = '⏳ Aguarde...';
+
+  // Desconecta e apaga a sessão
+  await api.disconnectWhatsApp();
+
+  // Mostra estado de conexão e gera novo QR
+  setWaStatus('connecting');
+  await api.connectWhatsApp();
+}
+
 function setWaStatus(status) {
   const pill   = document.getElementById('wa-pill');
   const text   = document.getElementById('wa-pill-text');
@@ -1198,6 +1217,7 @@ function setWaStatus(status) {
   const btnTxt = document.getElementById('connect-btn-text');
   const detail = document.getElementById('home-status-detail');
   const qrCard = document.getElementById('home-qr-card');
+  const btnTrocar = document.getElementById('btn-trocar-numero');
 
   pill.className = 'wa-status-pill';
 
@@ -1207,8 +1227,12 @@ function setWaStatus(status) {
     text.textContent = 'Conectado';
     btnTxt.textContent = 'Desconectar';
     btn.classList.add('disconnect');
+    btn.disabled = false;
     detail.innerHTML = '<span style="color:var(--green);font-weight:600">✓ WhatsApp conectado e pronto para envio!</span>';
     qrCard.style.display = 'none';
+    btnTrocar.style.display = 'block';
+    btnTrocar.disabled = false;
+    btnTrocar.textContent = '🔄 Trocar número';
   } else if (status === 'connecting') {
     state.waConnected = false; state.waConnecting = true;
     pill.classList.add('connecting');
@@ -1219,6 +1243,7 @@ function setWaStatus(status) {
     qrCard.style.display = 'block';
     document.getElementById('qr-loading').style.display = 'flex';
     document.getElementById('qr-img').style.display = 'none';
+    btnTrocar.style.display = 'none';
   } else {
     state.waConnected = false; state.waConnecting = false;
     text.textContent = 'Desconectado';
@@ -1227,6 +1252,7 @@ function setWaStatus(status) {
     btn.disabled = false;
     detail.textContent = 'WhatsApp não conectado. Use o botão na barra lateral para conectar.';
     qrCard.style.display = 'none';
+    btnTrocar.style.display = 'none';
   }
 
   refreshSendChecklist();

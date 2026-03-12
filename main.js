@@ -78,7 +78,7 @@ function createWindow() {
 // ─── Eventos do autoUpdater ───────────────────────────────────────────────────
 autoUpdater.on('update-available', (info) => {
   logger && logger.log.info('AUTOUPDATE', 'Nova versão disponível', info);
-  mainWindow.webContents.send('update_available', info);
+  safeSend('update_available', info);
 });
 
 autoUpdater.on('update-not-available', (info) => {
@@ -91,7 +91,7 @@ autoUpdater.on('error', (err) => {
 
 autoUpdater.on('download-progress', (progressObj) => {
   logger && logger.log.info('AUTOUPDATE', `Download: ${progressObj.percent}%`);
-  mainWindow.webContents.send('update_progress', progressObj);
+  safeSend('update_progress', progressObj);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
@@ -190,7 +190,21 @@ ipcMain.handle('connect-whatsapp', async () => {
 });
 
 ipcMain.handle('disconnect-whatsapp', async () => {
-  if (waClient) { try { await waClient.destroy(); } catch {} waClient = null; }
+  if (waClient) {
+    try { await waClient.logout(); } catch {}
+    try { await waClient.destroy(); } catch {}
+    waClient = null;
+  }
+
+  // Apaga a sessão salva para forçar novo QR Code na próxima conexão
+  const sessionPath = path.join(app.getPath('userData'), 'wa-session');
+  try {
+    fs.rmSync(sessionPath, { recursive: true, force: true });
+    logger && logger.log.info('WHATSAPP', 'Sessão apagada com sucesso');
+  } catch (err) {
+    logger && logger.log.warn('WHATSAPP', 'Falha ao apagar sessão', { erro: err.message });
+  }
+
   logger && logger.log.info('WHATSAPP', 'Desconectado manualmente');
   return { ok: true };
 });
