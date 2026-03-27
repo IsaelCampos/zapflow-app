@@ -5,7 +5,7 @@ const fs   = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 // ─── URL do servidor de licenças ──────────────────────────────────────────────
-const SERVER_URL = 'https://astonishing-endurance-production-154b.up.railway.app';
+const SERVER_URL = 'http://localhost:3000';
 
 let mainWindow;
 let licencaValida       = false;
@@ -31,7 +31,7 @@ function iniciarVerificacaoPeriodica() {
   verificacaoInterval = setInterval(() => {
     if (!licencaValida) return;
     verificarLicencaOnline();
-  }, 1 * 60 * 1000);
+  }, 7 * 60 * 1000);
 }
 
 async function verificarLicencaOnline() {
@@ -148,6 +148,18 @@ ipcMain.handle('choose-file', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+ipcMain.handle('choose-image', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Selecionar imagem para envio',
+    filters: [{ name: 'Imagens', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled) return null;
+  const filePath = result.filePaths[0];
+  logger && logger.log.info('IMAGEM', 'Imagem selecionada', { arquivo: filePath });
+  return filePath;
+});
+
 ipcMain.handle('read-excel', async (_, filePath, sheetName) => {
   try {
     const { lerPlanilha } = require('./src/leitor_excel');
@@ -210,7 +222,7 @@ ipcMain.handle('disconnect-whatsapp', async () => {
 });
 
 // ─── Envio ────────────────────────────────────────────────────────────────────
-ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs }) => {
+ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs, imagemPath }) => {
   if (!licencaValida) {
     logger && logger.log.warn('ENVIO', 'Envio bloqueado — licença inválida');
     return { ok: false, motivo: 'Licença inválida. Ative novamente.' };
@@ -261,9 +273,20 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs 
         if (!numberId) throw new Error('Número não encontrado no WhatsApp');
         const chatId = numberId._serialized;
         await sleep(500);
-        const msg = await waClient.sendMessage(chatId, mensagem);
-        await sleep(1000);
-        if (!msg || !msg.id) throw new Error('Falha silenciosa no envio');
+
+        if (imagemPath) {
+          // Envia imagem com a mensagem como legenda
+          const { MessageMedia } = require('whatsapp-web.js');
+          const media = MessageMedia.fromFilePath(imagemPath);
+          const msg = await waClient.sendMessage(chatId, media, { caption: mensagem });
+          await sleep(1000);
+          if (!msg || !msg.id) throw new Error('Falha silenciosa no envio da imagem');
+        } else {
+          // Envia só texto
+          const msg = await waClient.sendMessage(chatId, mensagem);
+          await sleep(1000);
+          if (!msg || !msg.id) throw new Error('Falha silenciosa no envio');
+        }
 
         enviados++;
         relatorio.registrarEnvio(sessaoId, c.nome, c.telefone, 'sucesso', null, 1);

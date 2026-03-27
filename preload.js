@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('api', {
   chooseFile: ()            => ipcRenderer.invoke('choose-file'),
   readExcel:  (path, sheet) => ipcRenderer.invoke('read-excel', path, sheet),
 
+  // Imagem
+  chooseImage: ()           => ipcRenderer.invoke('choose-image'),
+
   // WhatsApp
   connectWhatsApp:    ()    => ipcRenderer.invoke('connect-whatsapp'),
   disconnectWhatsApp: ()    => ipcRenderer.invoke('disconnect-whatsapp'),
