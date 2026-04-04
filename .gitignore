@@ -3,3 +3,4 @@ dist
 .env
 .wwebjs_cache
 package-lock.json
+.gitignore
