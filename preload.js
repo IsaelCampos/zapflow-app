@@ -7,38 +7,42 @@ contextBridge.exposeInMainWorld('api', {
   close:     () => ipcRenderer.send('window-close'),
 
   // Excel
-  chooseFile: ()            => ipcRenderer.invoke('choose-file'),
-  readExcel:  (path, sheet) => ipcRenderer.invoke('read-excel', path, sheet),
+  chooseFile:     ()              => ipcRenderer.invoke('choose-file'),
+  readExcel:      (path, sheet)   => ipcRenderer.invoke('read-excel', path, sheet),
+  getExcelSheets: (path)          => ipcRenderer.invoke('get-excel-sheets', path),
 
   // Imagem
-  chooseImage: ()           => ipcRenderer.invoke('choose-image'),
+  chooseImage: () => ipcRenderer.invoke('choose-image'),
 
   // WhatsApp
-  connectWhatsApp:    ()    => ipcRenderer.invoke('connect-whatsapp'),
-  disconnectWhatsApp: ()    => ipcRenderer.invoke('disconnect-whatsapp'),
-  startSending: (opts)      => ipcRenderer.invoke('start-sending', opts),
-  cancelSending: ()         => ipcRenderer.send('cancel-sending'),
+  connectWhatsApp:    () => ipcRenderer.invoke('connect-whatsapp'),
+  disconnectWhatsApp: () => ipcRenderer.invoke('disconnect-whatsapp'),
+  startSending: (opts)   => ipcRenderer.invoke('start-sending', opts),
+  cancelSending: ()      => ipcRenderer.send('cancel-sending'),
 
   // Histórico
-  getHistory: ()            => ipcRenderer.invoke('get-history'),
+  getHistory: () => ipcRenderer.invoke('get-history'),
 
-  // Licença
-  getMachineInfo:    ()     => ipcRenderer.invoke('get-machine-info'),
-  salvarLicenca:  (dados)   => ipcRenderer.invoke('salvar-licenca', dados),
+  // Licença — toda comunicação com o servidor ocorre no main process
+  getMachineInfo:  ()       => ipcRenderer.invoke('get-machine-info'),
+  ativarLicenca:   (dados)  => ipcRenderer.invoke('ativar-licenca', dados),
+  salvarLicenca:   (dados)  => ipcRenderer.invoke('salvar-licenca', dados),
   licencaConfirmada: ()     => ipcRenderer.invoke('licenca-confirmada'),
 
   // Logs e exportação
-  getLogs:         ()       => ipcRenderer.invoke('get-logs'),
-  readLog:   (caminho)      => ipcRenderer.invoke('read-log', caminho),
-  exportarCSV: (sessaoId)   => ipcRenderer.invoke('exportar-csv', sessaoId),
-  abrirPastaLogs: ()        => ipcRenderer.invoke('abrir-pasta-logs'),
+  getLogs:         ()         => ipcRenderer.invoke('get-logs'),
+  readLog:   (caminho)        => ipcRenderer.invoke('read-log', caminho),
+  exportarCSV: (sessaoId)     => ipcRenderer.invoke('exportar-csv', sessaoId),
+  abrirPastaLogs: ()          => ipcRenderer.invoke('abrir-pasta-logs'),
 
   // Eventos do main → renderer
   on: (channel, fn) => {
     const allowed = [
       'wa-qr', 'wa-authenticated', 'wa-ready', 'wa-disconnected', 'wa-error',
       'sending-progress', 'sending-countdown', 'sending-done',
-      'licenca-status'
+      'licenca-status',
+      'update_available', 'update_progress',
+      'trial-atualizado', 'trial-aviso', 'trial-esgotado', 'trial-limitado'
     ];
     if (allowed.includes(channel)) ipcRenderer.on(channel, (_, ...args) => fn(...args));
   },

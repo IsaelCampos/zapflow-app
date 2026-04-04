@@ -77,4 +77,9 @@ async function verificarOnline(serverUrl, chave, machineId) {
   return postRequest(`${serverUrl}/api/verificar`, { chave, machine_id: machineId });
 }
 
-module.exports = { getMachineId, salvarLicenca, lerLicenca, ativarChave, verificarOnline, getLicencaPath };
+// Incrementa contador de envios do trial no servidor
+async function registrarEnviosTrial(serverUrl, chave, machineId, quantidade) {
+  return postRequest(`${serverUrl}/api/registrar-envios`, { chave, machine_id: machineId, quantidade });
+}
+
+module.exports = { getMachineId, salvarLicenca, lerLicenca, ativarChave, verificarOnline, getLicencaPath, registrarEnviosTrial };

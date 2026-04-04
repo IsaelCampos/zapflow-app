@@ -1,11 +1,15 @@
 // main.js — Processo principal do Electron
+require('dotenv').config();
+
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 // ─── URL do servidor de licenças ──────────────────────────────────────────────
-const SERVER_URL = 'http://localhost:3000';
+// Em produção, defina ZAPFLOW_SERVER_URL no .env do app ou como variável de
+// ambiente do sistema. Em desenvolvimento, cai para localhost automaticamente.
+const SERVER_URL = process.env.ZAPFLOW_SERVER_URL || 'http://localhost:3000';
 
 let mainWindow;
 let licencaValida       = false;
@@ -14,7 +18,10 @@ let sendingActive       = false;
 let verificacaoInterval = null;
 let logger              = null;
 
-const { getMachineId, lerLicenca, salvarLicenca, verificarOnline, getLicencaPath } = require('./src/licenca');
+// Estado do trial (atualizado a cada verificação)
+let trialInfo = { ativo: false, limite: 50, realizados: 0, restantes: 50, diasRestantes: 7 };
+
+const { getMachineId, lerLicenca, salvarLicenca, verificarOnline, getLicencaPath, registrarEnviosTrial } = require('./src/licenca');
 
 // ─── safeSend ─────────────────────────────────────────────────────────────────
 function safeSend(channel, ...args) {
@@ -69,7 +76,6 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  // Configuração do autoUpdater
   mainWindow.once('ready-to-show', () => {
     autoUpdater.checkForUpdatesAndNotify();
   });
@@ -81,7 +87,7 @@ autoUpdater.on('update-available', (info) => {
   safeSend('update_available', info);
 });
 
-autoUpdater.on('update-not-available', (info) => {
+autoUpdater.on('update-not-available', () => {
   logger && logger.log.info('AUTOUPDATE', 'Nenhuma atualização disponível');
 });
 
@@ -94,17 +100,15 @@ autoUpdater.on('download-progress', (progressObj) => {
   safeSend('update_progress', progressObj);
 });
 
-autoUpdater.on('update-downloaded', (info) => {
+autoUpdater.on('update-downloaded', () => {
   logger && logger.log.info('AUTOUPDATE', 'Atualização baixada. Pronto para instalar.');
   dialog.showMessageBox({
     type: 'question',
     buttons: ['Instalar e Reiniciar', 'Mais tarde'],
     defaultId: 0,
-    message: 'Uma nova versão do ZapFlow foi baixada. Deseja reiniciar o aplicativo para instalar as atualizações?'
+    message: 'Uma nova versão do ZapFlow foi baixada. Deseja reiniciar para instalar?'
   }).then(returnValue => {
-    if (returnValue.response === 0) {
-      autoUpdater.quitAndInstall();
-    }
+    if (returnValue.response === 0) autoUpdater.quitAndInstall();
   });
 });
 
@@ -112,7 +116,7 @@ autoUpdater.on('update-downloaded', (info) => {
 app.whenReady().then(async () => {
   logger = require('./src/logger');
   logger.inicializar(app.getPath('userData'));
-  logger.log.info('APP', 'ZapFlow iniciado', { versao: app.getVersion() });
+  logger.log.info('APP', 'ZapFlow iniciado', { versao: app.getVersion(), servidor: SERVER_URL });
 
   createWindow();
   mainWindow.webContents.on('did-finish-load', async () => {
@@ -172,6 +176,17 @@ ipcMain.handle('read-excel', async (_, filePath, sheetName) => {
   }
 });
 
+// Nova rota: retorna as abas disponíveis de um arquivo Excel
+ipcMain.handle('get-excel-sheets', async (_, filePath) => {
+  try {
+    const XLSX = require('xlsx');
+    const wb = XLSX.readFile(path.resolve(filePath));
+    return { ok: true, sheets: wb.SheetNames };
+  } catch (err) {
+    return { ok: false, sheets: [], erro: err.message };
+  }
+});
+
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────
 ipcMain.handle('connect-whatsapp', async () => {
   if (waClient) { try { await waClient.destroy(); } catch {} waClient = null; }
@@ -208,7 +223,6 @@ ipcMain.handle('disconnect-whatsapp', async () => {
     waClient = null;
   }
 
-  // Apaga a sessão salva para forçar novo QR Code na próxima conexão
   const sessionPath = path.join(app.getPath('userData'), 'wa-session');
   try {
     fs.rmSync(sessionPath, { recursive: true, force: true });
@@ -246,6 +260,26 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs,
   if (!waClient)     return { ok: false, motivo: 'WhatsApp não conectado' };
   if (sendingActive) return { ok: false, motivo: 'Envio já em andamento' };
 
+  // Trial: verifica limite antes de iniciar
+  if (trialInfo.ativo) {
+    if (trialInfo.restantes <= 0) {
+      logger && logger.log.warn('ENVIO', 'Trial esgotado — envio bloqueado');
+      safeSend('trial-esgotado', { motivo: 'Você atingiu o limite de ' + trialInfo.limite + ' envios do trial. Adquira um plano para continuar.' });
+      return { ok: false, motivo: 'Trial esgotado. Adquira um plano para continuar.' };
+    }
+    // Aviso se <= 20% restante
+    const pctRestante = (trialInfo.restantes / trialInfo.limite) * 100;
+    if (pctRestante <= 20) {
+      safeSend('trial-aviso', { restantes: trialInfo.restantes, limite: trialInfo.limite });
+    }
+    // Limita a sessão ao que resta no trial
+    if (contatos.length > trialInfo.restantes) {
+      logger && logger.log.warn('ENVIO', `Trial: limitando envio de ${contatos.length} para ${trialInfo.restantes} contatos`);
+      contatos = contatos.slice(0, trialInfo.restantes);
+      safeSend('trial-limitado', { original: contatos.length, permitido: trialInfo.restantes });
+    }
+  }
+
   sendingActive = true;
   logger && logger.log.info('ENVIO', `Iniciando envio para ${contatos.length} contatos`);
 
@@ -275,14 +309,12 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs,
         await sleep(500);
 
         if (imagemPath) {
-          // Envia imagem com a mensagem como legenda
           const { MessageMedia } = require('whatsapp-web.js');
           const media = MessageMedia.fromFilePath(imagemPath);
           const msg = await waClient.sendMessage(chatId, media, { caption: mensagem });
           await sleep(1000);
           if (!msg || !msg.id) throw new Error('Falha silenciosa no envio da imagem');
         } else {
-          // Envia só texto
           const msg = await waClient.sendMessage(chatId, mensagem);
           await sleep(1000);
           if (!msg || !msg.id) throw new Error('Falha silenciosa no envio');
@@ -292,6 +324,36 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs,
         relatorio.registrarEnvio(sessaoId, c.nome, c.telefone, 'sucesso', null, 1);
         logger && logger.log.info('ENVIO', `Enviado para ${c.nome} (${c.telefone})`);
         safeSend('sending-progress', { index: i, total: contatos.length, nome: c.nome, telefone: c.telefone, status: 'ok' });
+
+        // Trial: incrementa contador no servidor
+        if (trialInfo.ativo) {
+          trialInfo.realizados++;
+          trialInfo.restantes = Math.max(0, trialInfo.restantes - 1);
+
+          const salvaAtual = lerLicenca(app.getPath('userData'));
+          if (salvaAtual && salvaAtual.chave) {
+            try {
+              await registrarEnviosTrial(SERVER_URL, salvaAtual.chave, getMachineId(), 1);
+              logger && logger.log.info('TRIAL', `Contador atualizado: ${trialInfo.realizados}/${trialInfo.limite}`);
+            } catch (errTrial) {
+              logger && logger.log.warn('TRIAL', 'Falha ao registrar envio no servidor', { erro: errTrial.message });
+            }
+          }
+
+          safeSend('trial-atualizado', { realizados: trialInfo.realizados, restantes: trialInfo.restantes, limite: trialInfo.limite });
+
+          // Aviso com 20% de antecedência
+          const pct = (trialInfo.restantes / trialInfo.limite) * 100;
+          if (trialInfo.restantes > 0 && pct <= 20) {
+            safeSend('trial-aviso', { restantes: trialInfo.restantes, limite: trialInfo.limite });
+          }
+
+          // Para o envio se trial esgotou durante a sessão
+          if (trialInfo.restantes <= 0) {
+            logger && logger.log.warn('TRIAL', 'Limite atingido durante envio — parando sessão');
+            sendingActive = false;
+          }
+        }
 
       } catch (err) {
         erros++;
@@ -320,12 +382,18 @@ ipcMain.handle('start-sending', async (_, { contatos, mensagemTemplate, delayMs,
   return { ok: true };
 });
 
-ipcMain.on('cancel-sending', () => { sendingActive = false; logger && logger.log.info('ENVIO', 'Cancelado pelo usuário'); });
+ipcMain.on('cancel-sending', () => {
+  sendingActive = false;
+  logger && logger.log.info('ENVIO', 'Cancelado pelo usuário');
+});
 
 // ─── Histórico ────────────────────────────────────────────────────────────────
 ipcMain.handle('get-history', () => {
-  try { const { relatorio } = require('./src/relatorio'); relatorio.inicializar(); return relatorio.obterUltimasSessoes(20); }
-  catch { return []; }
+  try {
+    const { relatorio } = require('./src/relatorio');
+    relatorio.inicializar();
+    return relatorio.obterUltimasSessoes(20);
+  } catch { return []; }
 });
 
 // ─── Logs e exportação ────────────────────────────────────────────────────────
@@ -350,7 +418,7 @@ async function verificarLicenca() {
   const salva = lerLicenca(app.getPath('userData'));
   if (!salva || !salva.chave) {
     logger && logger.log.info('LICENCA', 'Nenhuma licença salva');
-    safeSend('licenca-status', { ok: false, acao: 'ativar', serverUrl: SERVER_URL, machineId: getMachineId() });
+    safeSend('licenca-status', { ok: false, acao: 'ativar', machineId: getMachineId() });
     return;
   }
 
@@ -358,15 +426,22 @@ async function verificarLicenca() {
     const resultado = await verificarOnline(SERVER_URL, salva.chave, getMachineId());
     if (resultado && resultado.ok) {
       licencaValida = true;
+      // Atualiza info de trial se aplicável
+      if (resultado.trial) {
+        trialInfo = { ativo: true, limite: resultado.trial_limite, realizados: resultado.trial_realizados, restantes: resultado.trial_restantes, diasRestantes: resultado.trial_dias_restantes };
+      } else {
+        trialInfo = { ativo: false, limite: 0, realizados: 0, restantes: 0, diasRestantes: 0 };
+      }
       logger && logger.log.info('LICENCA', 'Licença válida', { plano: resultado.plano });
       safeSend('licenca-status', {
         ok: true,
         plano: resultado.plano,
         cliente: resultado.cliente,
         expira: resultado.expira_formatado,
-        serverUrl: SERVER_URL,
         machineId: getMachineId(),
-        chave: salva.chave
+        chave: salva.chave,
+        trial: resultado.trial || false,
+        trialInfo: resultado.trial ? trialInfo : null
       });
       iniciarVerificacaoPeriodica();
     } else {
@@ -376,6 +451,7 @@ async function verificarLicenca() {
       safeSend('licenca-status', { ok: false, acao: 'expirada', motivo: resultado?.erro || 'Licença inválida.' });
     }
   } catch (err) {
+    // Sem rede: usa cache local
     logger && logger.log.warn('LICENCA', 'Falha na verificação online, usando cache', { erro: err.message });
     licencaValida = true;
     safeSend('licenca-status', {
@@ -383,7 +459,6 @@ async function verificarLicenca() {
       plano: salva.plano,
       cliente: salva.cliente,
       expira: salva.expira_formatado,
-      serverUrl: SERVER_URL,
       machineId: getMachineId(),
       chave: salva.chave,
       offline: true
@@ -392,13 +467,69 @@ async function verificarLicenca() {
   }
 }
 
-ipcMain.handle('get-machine-info', () => ({ machineId: getMachineId(), serverUrl: SERVER_URL }));
+// Retorna apenas machine_id (não expõe serverUrl ao renderer)
+ipcMain.handle('get-machine-info', () => ({ machineId: getMachineId() }));
+
+// Ativação de licença — feita inteiramente no main process (seguro)
+ipcMain.handle('ativar-licenca', async (_, { chave }) => {
+  const chaveFormatada = chave.toUpperCase().trim();
+  const machineId = getMachineId();
+
+  try {
+    const resultado = await require('./src/licenca').ativarChave(SERVER_URL, chaveFormatada, machineId);
+
+    if (resultado && resultado.ok) {
+      const dadosLicenca = {
+        chave: chaveFormatada,
+        plano: resultado.plano,
+        cliente: resultado.cliente,
+        expira_em: resultado.expira_em,
+        expira_formatado: resultado.expira_formatado
+      };
+
+      salvarLicenca(app.getPath('userData'), dadosLicenca);
+      licencaValida = true;
+
+      // Atualiza trialInfo imediatamente — sem isso, o estado da licença anterior persiste
+      if (resultado.trial) {
+        trialInfo = {
+          ativo: true,
+          limite: resultado.trial_limite,
+          realizados: resultado.trial_realizados,
+          restantes: resultado.trial_restantes,
+          diasRestantes: resultado.trial_dias_restantes
+        };
+        logger && logger.log.info('TRIAL', `Trial ativado: ${trialInfo.restantes}/${trialInfo.limite} envios restantes`);
+      } else {
+        trialInfo = { ativo: false, limite: 0, realizados: 0, restantes: 0, diasRestantes: 0 };
+      }
+
+      iniciarVerificacaoPeriodica();
+      logger && logger.log.info('LICENCA', 'Licença ativada com sucesso', { plano: resultado.plano });
+
+      return {
+        ok: true,
+        plano: resultado.plano,
+        cliente: resultado.cliente,
+        expira: resultado.expira_formatado,
+        trial: resultado.trial || false,
+        trialInfo: resultado.trial ? trialInfo : null
+      };
+    } else {
+      logger && logger.log.warn('LICENCA', 'Falha na ativação', { erro: resultado?.erro });
+      return { ok: false, erro: resultado?.erro || 'Chave inválida.' };
+    }
+  } catch (err) {
+    logger && logger.log.erro('LICENCA', 'Erro de conexão ao ativar', { erro: err.message });
+    return { ok: false, erro: 'Erro de conexão com o servidor. Verifique sua internet.' };
+  }
+});
 
 ipcMain.handle('salvar-licenca', (_, dados) => {
   try {
     salvarLicenca(app.getPath('userData'), dados);
     licencaValida = true;
-    logger && logger.log.info('LICENCA', 'Licença ativada', { plano: dados.plano });
+    logger && logger.log.info('LICENCA', 'Licença salva', { plano: dados.plano });
     iniciarVerificacaoPeriodica();
     return { ok: true };
   } catch (err) {
@@ -409,7 +540,6 @@ ipcMain.handle('salvar-licenca', (_, dados) => {
 
 ipcMain.handle('licenca-confirmada', () => {
   licencaValida = true;
-  logger && logger.log.info('LICENCA', 'Confirmada pelo servidor');
   iniciarVerificacaoPeriodica();
   return { ok: true };
 });
